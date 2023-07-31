@@ -81,6 +81,7 @@ function loadReport(r) {
 
 function loadReportData(r, data) {
   diff = data;
+
   var report_title = r;
   var menu_entry = $('#'+r)[0];
   if(menu_entry != undefined) {
@@ -157,16 +158,15 @@ function addPie(diff) {
   $('#chart').html('');
 
   var all = Object.keys(diff);
-  var with_changes = [];
-  for (i=0; i < diff.most_differences.length; i++) {
-    with_changes.push(Object.keys(diff.most_differences[i])[0]);
-  }
+  var all_changed = diff.all_changed_nodes;
+  var with_changes = all_changed;
+
   var failed = [];
   if (diff.pull_output != undefined) {
     failed = Object.keys(diff.pull_output.failed_nodes);
   }
-  var reserved = ['date', 'max_diff', 'most_changed', 'most_differences', 'total_nodes', 'total_percentage', 'with_changes', 'pull_output', 'fact_search', 'all_changed_nodes'];
-  var no_changes = $(all).not(with_changes).not(failed).not(reserved);
+  reserved = ["total_percentage", "with_changes", "most_changed", "most_differences", "total_nodes", "date", "all_changed_nodes"]
+  var no_changes = $(all).not(all_changed).not(reserved);
 
   diff.no_changes = [];
   for (var i=0; i < no_changes.length; i++) {
@@ -280,7 +280,7 @@ function addPie(diff) {
 function badgeValue(n, data) {
   switch (n) {
     case 'diff':
-      return markStats(data.differences_as_diff).unacked;
+      return markStats(data.differences).unacked;
       break;
 
     case 'in-old':
@@ -394,21 +394,25 @@ function listNodes(label, refresh_crumbs) {
   var cur_node = $('#crumb-node').text;
 
   if (label === 'with changes') {
-    var most_differences = diff.most_differences;
+    var all_changed = diff.all_changed_nodes;
+    var most_differences = diff.most_differences
 
-    if (most_differences.length === 0)
+    if (all_changed.length === 0)
       return
 
     if (diff.max_diff === undefined)
       diff.max_diff = most_differences[0][Object.keys(diff.most_differences[0])];
 
     // Calculate ack stats for all nodes
-    for (var i=0; i < most_differences.length; i++) {
-      var node = Object.keys(most_differences[i])[0];
+    for (var node of all_changed) {
       var data = diff[node];
 
+      if (!data.hasOwnProperty("differences")) {
+        data["differences"] = {...data.differences_as_diff, ...data.content_differences};
+      }
+
       data['markstats'] = {
-        differences_as_diff: markStats(data.differences_as_diff),
+        differences_as_diff: markStats(data.differences),
         only_in_old: markStats(data.only_in_old, 'old'),
         only_in_new: markStats(data.only_in_new, 'new')
       };
@@ -421,17 +425,13 @@ function listNodes(label, refresh_crumbs) {
     }
 
     // Sort nodes by unacked differences
-    most_differences.sort(function(a, b) {
-      var a_node = Object.keys(a)[0];
-      var b_node = Object.keys(b)[0];
-
+    all_changed.sort(function(a_node, b_node) {
       return diff[b_node]['unacked_node_differences'] + diff[b_node]['starred_node_differences']
            - diff[a_node]['unacked_node_differences'] - diff[a_node]['starred_node_differences'];
     });
 
-    for (var i=0; i < most_differences.length; i++) {
+    for (var node of all_changed) {
       // Weird data structure...
-      var node = Object.keys(most_differences[i])[0];
       var data = diff[node];
       var n_diff = data.markstats.differences_as_diff.unacked;
       var p_diff = 100 * n_diff / data.node_differences;
@@ -732,31 +732,24 @@ function safeId(str) {
 
 function differencesAsDiff(data) {
   var html = $('<p>');
-  var diffs = data.differences_as_diff;
-  var keys = Object.keys(diffs).sort();
-  for (var i=0; i < keys.length; i++) {
-    var k = keys[i];
-    var diff_str = diffs[k];
-
+  if (!data.hasOwnProperty("differences")) {
+    data["differences"] = {...data.differences_as_diff, ...data.content_differences};
+  }
+  for (let [node, diff_str] of Object.entries(data.differences)) {
     if (diff_str.constructor === Array) {
       diff_str = "--- old\n+++ new\n"+diff_str.join("\n");
     }
-    var acked_class = isAcked(k, diff_str) ? ' acked' : '';
-    var starred_class = isStarred(k, diff_str) ? ' starred' : '';
-    var resource = $('<div>', { id: safeId('diff:'+k), class: 'list-group resource'+acked_class+starred_class })
+    var acked_class = isAcked(node, diff_str) ? ' acked' : '';
+    var starred_class = isStarred(node, diff_str) ? ' starred' : '';
+    var resource = $('<div>', { id: safeId('diff:'+node), class: 'list-group resource'+acked_class+starred_class })
       .append($('<div>', { class: 'glyphicon glyphicon-ok ack' })
-          .on("click", $.proxy(function(k, diff_str, data) { toggleAckDiff(k, diff_str, 'diff', data) }, null, k, diff_str, data)))
+          .on("click", $.proxy(function(node, diff_str, data) { toggleAckDiff(node, diff_str, 'diff', data) }, null, node, diff_str, data)))
       .append($('<div>', { class: 'glyphicon glyphicon-star star' })
-          .on("click", $.proxy(function(k, diff_str, data) { toggleStarDiff(k, diff_str, 'diff', data) }, null, k, diff_str, data)))
-      .append($('<div>', { class: 'resource-title', html: k })
-          .on("click", $.proxy(function(k) { activateDiff('diff', k) }, null, k)))
+          .on("click", $.proxy(function(node, diff_str, data) { toggleStarDiff(node, diff_str, 'diff', data) }, null, node, diff_str, data)))
+      .append($('<div>', { class: 'resource-title', html: node })
+          .on("click", $.proxy(function(node) { activateDiff('diff', node) }, null, node)))
       .append($('<pre>', { class: 'sh_diff', text: diff_str })
-          .on("click", $.proxy(function(k) { activateDiff('diff', k) }, null, k)));
-
-    if (data.content_differences[k]) {
-      var content_diff_str = data.content_differences[k];
-      resource.append($('<pre>', { class: 'sh_diff', text: content_diff_str }));
-    }
+          .on("click", $.proxy(function(node) { activateDiff('diff', node) }, null, node)));
 
     html.append(resource);
   }
@@ -865,7 +858,7 @@ function foreachDiff(id, data, cb) {
   var diffs;
   switch (id) {
     case 'diff':
-      diffs = data.differences_as_diff;
+      diffs = data.differences;
       break;
 
     case 'in-old':
